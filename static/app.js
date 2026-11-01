@@ -147,6 +147,7 @@
   function channelText(item) { const a = accountFor(item); return a ? `${a.name} · ${platforms[a.platform] || a.platform}` : item.channel || 'Sin canal'; }
   function channelMatch(item) { return !selectedChannel || (selectedChannel === '__none' ? !item.social_account_id : item.social_account_id === selectedChannel); }
   function renderList() {
+    renderChannelSummary();
     const query = $('search').value.trim().toLocaleLowerCase('es');
     const filter = $('status-filter').value;
     const base = state.items.filter(item => channelMatch(item) && (!query || [item.title, item.script, item.channel, channelText(item), accountFor(item)?.handle].some(v => String(v || '').toLocaleLowerCase('es').includes(query))));
@@ -180,7 +181,7 @@
   function renderInspector(item) {
     const box = $('inspector'); box.replaceChildren(node('p', 'muted', 'Vista del guion'));
     if (!item) { box.append(node('h2', '', 'Espacio para tu próxima historia'), node('p', 'muted', 'Selecciona un vídeo o crea un borrador.')); return; }
-    box.append(node('h2', '', item.title), node('p', 'inspector-script', item.script ? item.script.slice(0, 360) + (item.script.length > 360 ? '…' : '') : 'Guion pendiente de escribir.'));
+    box.append(node('h2', '', item.title), node('p', 'inspector-script', item.script ? item.script.slice(0, 360) + (item.script.length > 360 ? '…' : '') : item.status === 'published' ? 'Guion no disponible' : 'Guion pendiente de escribir.'));
     const placeholder = node('div', 'neutral-preview'); placeholder.append(node('span', '', '▷'), node('p', '', item.preview_url || youtubeId(item.youtube_url) ? 'Vista previa disponible en la ficha' : 'Vista previa pendiente'));
     const open = node('button', 'button button-primary full-width', 'Abrir vídeo'); open.type = 'button'; open.addEventListener('click', () => selectShort(item.id));
     box.append(placeholder, statusBadge(item.status), open);
@@ -428,7 +429,7 @@
     $('script-read-tab').hidden = locked || readingScript;
     $('script').hidden = locked || readingScript;
     $('script-reading').hidden = !locked && !readingScript;
-    $('script-reading').textContent = $('script').value || 'Guion pendiente de escribir.';
+    $('script-reading').textContent = $('script').value || (locked ? 'Guion no disponible' : 'Guion pendiente de escribir.');
     $('save-short').hidden = locked && activeSection !== 'summary';
     $('save-short').textContent = state.busy ? 'Guardando…' : locked ? 'Guardar metadatos' : 'Guardar cambios';
     $('publish-short').hidden = locked || state.current?.id == null;
@@ -544,6 +545,76 @@
       return url.href;
     } catch (_) { return null; }
   }
+  const publicStatuses = {ok: 'Consulta pública disponible', partial: 'Consulta pública parcial', blocked: 'Consulta pública bloqueada', missing_url: 'Falta enlace exacto', not_found: 'Perfil no encontrado', identity_mismatch: 'Identidad no coincidente'};
+  const publicMetricLabels = {followers: 'Seguidores', subscribers: 'Suscriptores', following: 'Siguiendo', posts: 'Publicaciones', likes: 'Me gusta', views: 'Visualizaciones'};
+  function trustedPublic(data) { return ['ok', 'partial'].includes(data?.status); }
+  function publicMetricText(metric) {
+    if (!metric) return '—';
+    const text = typeof metric.display === 'string' && metric.display.trim() ? metric.display : typeof metric.value === 'number' && Number.isFinite(metric.value) ? numberFormat.format(metric.value) : '—';
+    return text === '—' ? text : `${metric.approximate ? '≈ ' : ''}${text}`;
+  }
+  function sourceURL(value) {
+    if (typeof value !== 'string' || /[\s\\\x00-\x1f]/.test(value)) return null;
+    try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password ? url.href : null; } catch (_) { return null; }
+  }
+  function publicLink(value, text) {
+    const url = sourceURL(value);
+    if (!url) return null;
+    const link = node('a', '', text); link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer'; return link;
+  }
+  function renderChannelSummary() {
+    const box = $('channel-summary'); box.replaceChildren();
+    box.hidden = !socials.loaded || refs.mode || selectedChannel === '__none';
+    if (box.hidden) return;
+    if (!selectedChannel) {
+      const available = socials.items.filter(a => trustedPublic(a.public_data)).length;
+      box.append(node('p', 'small', `Datos públicos: ${available} de ${socials.items.length} canales con información · Sin conexión a plataformas`));
+      const pending = socials.items.filter(a => a.public_data?.status !== 'ok');
+      if (pending.length) {
+        const details = node('details', 'small'); details.append(node('summary', '', `${pending.length} canales con consulta pendiente o incompleta`));
+        const list = node('ul');
+        for (const a of pending) list.append(node('li', '', `${a.name} · ${platforms[a.platform] || a.platform} · ${publicStatuses[a.public_data?.status] || 'No consultado'}`));
+        details.append(list); box.append(details);
+      }
+      return;
+    }
+    const account = socials.items.find(a => a.id === selectedChannel);
+    if (!account) { box.append(node('p', 'small', 'Canal no disponible en el inventario')); return; }
+    const data = account.public_data, trusted = trustedPublic(data);
+    const heading = node('div', 'channel-summary-heading');
+    heading.append(node('strong', '', account.name || (trusted && data.profile?.display_name) || 'Canal'), node('span', 'small', platforms[account.platform] || account.platform));
+    const profile = profileURL(account) || (trusted && profileURL({...account, profile_url: data.canonical_url}));
+    const link = publicLink(profile, 'Abrir perfil ↗'); if (link) heading.append(link);
+    box.append(heading, node('p', 'small', `${publicStatuses[data?.status] || 'No consultado'} · Sin conexión a plataformas`));
+    if (trusted && data.profile?.description) box.append(node('p', 'channel-bio', data.profile.description));
+    if (trusted) {
+      const metrics = node('dl', 'channel-metrics');
+      const keys = new Set([account.platform === 'youtube' ? 'subscribers' : 'followers', 'posts', ...Object.keys(data.metrics || {}).filter(key => publicMetricLabels[key])]);
+      for (const key of keys) {
+        const metric = data.metrics?.[key];
+        const cell = node('div'); cell.dataset.publicMetric = key;
+        cell.append(node('dt', '', publicMetricLabels[key]), node('dd', '', publicMetricText(metric)));
+        if (metric) {
+          const provenance = node('small', '', `Observado: ${dateText(metric.observed_at)}`);
+          const source = publicLink(metric.source_url, 'Fuente ↗'); if (source) provenance.append(' · ', source);
+          cell.append(provenance);
+        }
+        metrics.append(cell);
+      }
+      box.append(metrics);
+    }
+    if (data) {
+      const provenance = node('p', 'small', `Intento de consulta: ${dateText(data.attempted_at)} · Método: ${data.source_method || 'No disponible'}`);
+      const source = publicLink(data.source_url, 'Fuente de consulta ↗'); if (source) provenance.append(' · ', source);
+      box.append(provenance);
+      if (trusted && Number.isInteger(data.publications_collected) && data.publications_collected >= 0) box.append(node('p', 'small', `${data.publications_collected} enlaces recopilados · No es el total de publicaciones del canal · Catálogo: ${data.catalog_status || 'No disponible'}`));
+      if (Array.isArray(data.notes) && data.notes.length) {
+        const notes = node('details', 'small'); notes.append(node('summary', '', 'Notas de la consulta'));
+        const list = node('ul'); for (const note of data.notes) list.append(node('li', '', note)); notes.append(list); box.append(notes);
+      }
+    }
+    if (account.analytics?.subscribers != null) box.append(node('p', 'small channel-screenshot', `${metricValue(account.analytics.subscribers)} suscriptores · Observación de captura, NO en directo · ${account.analytics.observed_at ? dateText(account.analytics.observed_at) : 'Fecha de captura desconocida'}${account.analytics.note ? ' · ' + account.analytics.note : ''}`));
+  }
   function toggleChannels(open) {
     $('channel-menu').hidden = !open; $('channel-toggle').setAttribute('aria-expanded', String(open));
     if (open) { renderSocials(); $('social-search').focus(); }
@@ -569,7 +640,9 @@
       row.append(button);
       const url = a.platform && profileURL(a);
       if (url) { const link = node('a', 'profile-link', '↗'); link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.setAttribute('aria-label', `Abrir perfil de ${a.name} en ${platforms[a.platform]}`); row.append(link); }
-      if (a.analytics?.subscribers != null) row.title = `${numberFormat.format(a.analytics.subscribers)} suscriptores · Observación de captura, NO en directo · ${a.analytics.observed_at ? dateText(a.analytics.observed_at) : 'Fecha de captura desconocida'}`;
+      const publicMetrics = trustedPublic(a.public_data) ? Object.entries(a.public_data.metrics || {}).filter(([key, metric]) => publicMetricLabels[key] && publicMetricText(metric) !== '—') : [];
+      if (publicMetrics.length) row.title = publicMetrics.map(([key, metric]) => `${publicMetricText(metric)} ${publicMetricLabels[key]} · ${a.public_data.source_method || 'Consulta pública'} · ${dateText(metric.observed_at)}${sourceURL(metric.source_url) ? ' · ' + sourceURL(metric.source_url) : ''}`).join('\n');
+      else if (a.analytics?.subscribers != null) row.title = `${numberFormat.format(a.analytics.subscribers)} suscriptores · Observación de captura, NO en directo · ${a.analytics.observed_at ? dateText(a.analytics.observed_at) : 'Fecha de captura desconocida'}`;
       box.append(row);
     }
     $('social-caption').textContent = `${filtered.length} de ${socials.items.length} canales · Inventario, sin conexión a plataformas`;
