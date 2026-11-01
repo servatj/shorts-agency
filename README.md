@@ -107,6 +107,14 @@ RUN_BROWSER_TESTS=1 python3 -m unittest discover -s tests -v
 
 Missing optional Playwright or Chromium produces a skip, not a core-suite failure. `PLAYWRIGHT_MODULE` may select the Node module location; `PLAYWRIGHT_CHROMIUM_EXECUTABLE` may select an existing browser (for example `/usr/bin/google-chrome`). No browser sandbox is disabled by these tests. An optional read-only CI workflow template is supplied at `docs/github-actions-tests.yml.example`, with no deployment or secrets. It is not active: the publishing GitHub credential lacks workflow scope. A repository owner can enable it by copying it to `.github/workflows/tests.yml` using a credential with the required permission; no CI pass is claimed for this release.
 
+## MCP for writing and production agents
+
+The optional official-SDK MCP bridge exposes the editorial workspace over **stdio** or authenticated **Streamable HTTP** at `/mcp`. It can read accounts/references/templates, create and update drafts, register real preview/thumbnail URLs, and submit work for review. It cannot publish, render, upload binary files, execute commands, fabricate metrics, or edit published records. Generating a video requires the client's separately authorized tools.
+
+See [connection and permissions](docs/MCP_ACCESS.md), [protocol/configuration](docs/MCP_PROTOCOL.md), and the copyable [Spanish production-agent prompt](prompts/SHORTS_AGENT_PROMPT.md). Optional dependencies are pinned in `requirements-mcp.txt`; ordinary application use still needs no pip packages. The HTTP bridge uses a dedicated bearer token, not the web password or the upstream REST token. OAuth-only cloud connectors are not supported by this authentication mode.
+
+The web application's exact `/mcp` route forwards only to a separate loopback service on port 8766; it is not an arbitrary proxy. If that optional service is not running, the route reports unavailability while normal app routes keep working. Follow the protocol document for setup and verify discovery with an actual MCP client; opening the endpoint in a browser is not a protocol test.
+
 ## Publication and licensing
 
 This repository contains code, generic templates, and synthetic test fixtures only. Runtime accounts, databases, media, passwords, and research are not part of the release. No software license has been selected; public visibility alone is not a grant of open-source reuse rights. No cloud deployment is configured.

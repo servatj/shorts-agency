@@ -10,6 +10,7 @@ from web_store import PublishedScriptLocked, WebStore
 from reference_store import ReferenceStore
 from web_media import open_media, byte_range
 from web_validation import ValidationError, short_fields, metric_fields
+from mcp_http_proxy import forward as forward_mcp
 
 CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https: data:; media-src 'self' https:; frame-src https://www.youtube-nocookie.com https://www.tiktok.com; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'"
 
@@ -29,7 +30,9 @@ def unique_object(pairs):
     return result
 
 
-def build_server(api, host, port, *, root=None):
+def build_server(api, host, port, *, root=None, mcp_port=8766):
+    if type(mcp_port) is not int or not 1 <= mcp_port <= 65535:
+        raise ValueError('invalid_mcp_port')
     root = Path(root) if root is not None else Path(__file__).resolve().parent
     static = {'/': ('index.html', 'text/html; charset=utf-8'), '/static/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/static/style.css': ('style.css', 'text/css; charset=utf-8')}
     for page in ('/social', '/scripts', '/videos', '/references'):
@@ -99,12 +102,23 @@ def build_server(api, host, port, *, root=None):
             try:
                 if len(self.headers.get_all('Origin', [])) > 1:
                     return self.respond(403, {'error': 'forbidden_origin'})
-                if any(len(self.headers.get_all(name, [])) > 1 for name in ('Authorization', 'Cookie', 'X-CSRF-Token', 'X-Forwarded-Proto')):
+                if any(len(self.headers.get_all(name, [])) > 1 for name in ('Host', 'Authorization', 'Cookie', 'X-CSRF-Token', 'X-Forwarded-Proto')):
                     raise RequestError(400, 'duplicate_header')
                 origin = self.headers.get('Origin')
                 if origin is not None and origin not in ORIGINS:
                     return self.respond(403, {'error': 'forbidden_origin'})
                 self.body_length()
+                if self.path.startswith(('/mcp/', '/mcp?', '/mcp#')):
+                    return self.respond(404, {'error': 'not_found'})
+                if self.path == '/mcp':
+                    if not self.headers.get('Host'):
+                        raise RequestError(400, 'invalid_host')
+                    length = self.body_length(required=self.command == 'POST')
+                    body = self.rfile.read(length)
+                    if len(body) != length:
+                        raise RequestError(400, 'invalid_body')
+                    status, data, kind, headers = forward_mcp(self.command, self.headers, body, port=mcp_port)
+                    return self.respond(status, data, kind, headers)
                 session = auth.session(self.headers.get('Cookie'))
                 bearer = bool(api.token) and equal(self.headers.get('Authorization', ''), f'Bearer {api.token}')
                 secure = self.headers.get('X-Forwarded-Proto', '').lower() == 'https'
