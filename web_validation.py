@@ -5,7 +5,7 @@ from datetime import datetime
 from urllib.parse import parse_qs, urlsplit
 
 MEDIA_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,199}\.(?:mp4|webm)')
-TEXT_LIMITS = {'title': 500, 'script': 100000, 'status': 20, 'language': 2, 'format': 4, 'youtube_url': 2048, 'preview_url': 2048, 'youtube_title': 500, 'description': 20000, 'channel': 500, 'notes': 20000}
+TEXT_LIMITS = {'title': 500, 'script': 100000, 'status': 20, 'language': 2, 'format': 4, 'youtube_url': 2048, 'preview_url': 2048, 'thumbnail_url': 4096, 'youtube_title': 500, 'description': 20000, 'channel': 500, 'notes': 20000}
 
 
 class ValidationError(ValueError):
@@ -91,6 +91,8 @@ def short_fields(body, create=False):
             raise ValidationError('invalid_' + key)
     if body.get('youtube_url'):
         youtube_url(body['youtube_url'])
+    if body.get('thumbnail_url'):
+        https_url(body['thumbnail_url'])
     if body.get('preview_url'):
         value = body['preview_url']
         if not (value.startswith('/media/') and MEDIA_NAME.fullmatch(value[7:])):

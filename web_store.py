@@ -4,7 +4,7 @@ import sqlite3
 import json
 from datetime import datetime, UTC
 
-SHORT_DEFAULTS = dict(script='', status='draft', language='es', format='9:16', youtube_url='', preview_url='', youtube_title='', description='', tags=[], channel='', notes='', social_account_id=None)
+SHORT_DEFAULTS = dict(script='', status='draft', language='es', format='9:16', youtube_url='', preview_url='', thumbnail_url='', youtube_title='', description='', tags=[], channel='', notes='', social_account_id=None)
 
 
 def now():
@@ -41,7 +41,7 @@ class WebStore:
 
     @staticmethod
     def short_row(row):
-        return {**json.loads(row['document']), 'id': row['id']}
+        return {'thumbnail_url': '', **json.loads(row['document']), 'id': row['id']}
 
     def list_shorts(self):
         with self.connect() as db:
@@ -75,7 +75,7 @@ class WebStore:
                 or ('status' in fields and fields['status'] != 'published')
             ):
                 raise PublishedScriptLocked()
-            document = {**existing, **fields, 'updated_at': now()}
+            document = {'thumbnail_url': '', **existing, **fields, 'updated_at': now()}
             db.execute('UPDATE web_shorts SET document=? WHERE id=?', (json.dumps(document), short_id))
         return {**document, 'id': short_id}
 

@@ -53,7 +53,7 @@ Published scripts are read-only. Registering a publication only records editoria
 - **Metrics:** manual/agent observations with timestamps; missing values remain unknown, not zero. No live analytics connection exists.
 - **Media:** put your own `.mp4`/`.webm` files directly in `media/` and use `/media/filename.mp4`. Authenticated reads support byte ranges; symlinks and traversal are rejected.
 
-The backend does not fetch stored URLs. Browser previews can contact external hosts; YouTube embeds require an explicit load action. Use only content you are authorized to access or display.
+The backend does not fetch stored URLs. Optional `thumbnail_url` metadata displays remote cover images. YouTube and strictly validated TikTok embeds require an explicit load action; Instagram uses a thumbnail and external link. A source link and return-to-cover action remain available if playback fails. See [preview behavior and validation](docs/PREVIEWS.md). Browser previews can contact external hosts. Use only content you are authorized to access or display.
 
 ## API summary
 

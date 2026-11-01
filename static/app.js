@@ -3,7 +3,7 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const labels = {draft: 'Borrador', review: 'En revisión', ready: 'Listo', published: 'Publicado'};
-  const fields = ['title', 'script', 'status', 'language', 'format', 'youtube_url', 'preview_url', 'youtube_title', 'description', 'tags', 'channel', 'notes', 'social_account_id'];
+  const fields = ['title', 'script', 'status', 'language', 'format', 'youtube_url', 'preview_url', 'thumbnail_url', 'youtube_title', 'description', 'tags', 'channel', 'notes', 'social_account_id'];
   const metricFields = ['views', 'likes', 'comments', 'shares', 'average_view_duration_seconds', 'retention_percent'];
   const state = {csrf: '', items: [], current: null, baseline: '', dirty: false, metricDirty: false, busy: false, authenticated: false, loaded: false, selectionRequest: 0, metricRequest: 0};
   const editor = $('editor-form');
@@ -169,7 +169,7 @@
     for (const item of items) {
       const li = node('li'); const button = node('button', 'short-item'); button.type = 'button';
       const title = node('span', 'row-title');
-      title.append(node('span', 'thumbnail', item.format === '16:9' ? '▭' : '▯'), node('strong', '', item.title || 'Sin título'));
+      title.append(thumbnail(item, 'thumbnail'), node('strong', '', item.title || 'Sin título'));
       button.append(title, node('span', 'row-channel', channelText(item)), statusBadge(item.status), node('span', 'row-arrow', '›'));
       button.addEventListener('click', () => selectShort(item.id));
       button.addEventListener('focus', () => renderInspector(item));
@@ -182,7 +182,7 @@
     const box = $('inspector'); box.replaceChildren(node('p', 'muted', 'Vista del guion'));
     if (!item) { box.append(node('h2', '', 'Espacio para tu próxima historia'), node('p', 'muted', 'Selecciona un vídeo o crea un borrador.')); return; }
     box.append(node('h2', '', item.title), node('p', 'inspector-script', item.script ? item.script.slice(0, 360) + (item.script.length > 360 ? '…' : '') : item.status === 'published' ? 'Guion no disponible' : 'Guion pendiente de escribir.'));
-    const placeholder = node('div', 'neutral-preview'); placeholder.append(node('span', '', '▷'), node('p', '', item.preview_url || youtubeId(item.youtube_url) ? 'Vista previa disponible en la ficha' : 'Vista previa pendiente'));
+    const placeholder = thumbnail(item, 'neutral-preview');
     const open = node('button', 'button button-primary full-width', 'Abrir vídeo'); open.type = 'button'; open.addEventListener('click', () => selectShort(item.id));
     box.append(placeholder, statusBadge(item.status), open);
   }
@@ -298,12 +298,12 @@
     } catch (_) { return null; }
   }
   function safePreview(value) {
-    if (!value) return null;
+    if (!value || /[\s\\\x00-\x1f\x7f]/.test(value)) return null;
     try {
       const url = new URL(value, location.origin);
       if (url.username || url.password) return null;
-      const local = value.startsWith('/media/') && url.origin === location.origin && url.pathname.startsWith('/media/');
-      if (local) return {url: url.href, video: true};
+      const local = /^\/media\/[A-Za-z0-9][A-Za-z0-9_.-]{0,199}\.(?:mp4|webm)$/.test(value) && url.origin === location.origin;
+      if (local) return {url: url.href, video: true, local: true};
       if (url.protocol === 'https:' && /^https:\/\//i.test(value)) return {url: url.href, video: /\.mp4$/i.test(url.pathname)};
       return null;
     } catch (_) { return null; }
@@ -313,6 +313,26 @@
     const symbol = node('span', 'preview-symbol');
     symbol.setAttribute('aria-hidden', 'true');
     content.append(symbol, node('strong', '', title), node('p', '', description));
+  }
+  function thumbnailURL(value) {
+    return typeof value === 'string' && value.length <= 4096 && !/[\s\\\x00-\x1f\x7f]/.test(value) && !/^https:\/\/[^/]*@/i.test(value) ? sourceURL(value) : null;
+  }
+  const failedThumbnails = new Set();
+  function thumbnail(item, className) {
+    const box = node('div', `${className} owned-thumbnail`);
+    const fallback = () => box.replaceChildren(node('span', 'thumbnail-fallback', 'Imagen no disponible'));
+    const url = thumbnailURL(item.thumbnail_url);
+    if (!url || failedThumbnails.has(url)) { fallback(); return box; }
+    const image = node('img');
+    image.alt = `Miniatura: ${item.title || 'Vídeo sin título'}`;
+    image.loading = 'lazy'; image.referrerPolicy = 'no-referrer';
+    image.addEventListener('error', () => { failedThumbnails.add(url); fallback(); }, {once: true});
+    image.src = url; box.append(image); return box;
+  }
+  function tiktokId(value) {
+    // Match the original string, before URL normalization can erase bogus paths.
+    const match = /^https:\/\/(?:www\.)?tiktok\.com\/@[A-Za-z0-9_.]+\/video\/(\d+)(?:\?[^\s\\#]*)?$/.exec(value);
+    return match && !/[\x00-\x1f\x7f]/.test(value) ? match[1] : null;
   }
   function renderPreview() {
     const content = $('preview-content');
@@ -329,11 +349,20 @@
     const preview = $('preview_url').value.trim();
     const id = youtubeId(youtube);
     const media = safePreview(preview);
+    const tiktok = tiktokId(preview);
+    let sourceLinks = $('preview-source-links');
+    if (!sourceLinks) { sourceLinks = node('div'); sourceLinks.id = 'preview-source-links'; $('preview-help').after(sourceLinks); }
+    sourceLinks.replaceChildren();
+    if (media) {
+      const link = node('a', 'external-link', 'Si el reproductor no está disponible, abrir original ↗');
+      link.href = media.url; link.target = '_blank'; link.rel = 'noopener noreferrer'; sourceLinks.append(link);
+    }
     $('youtube-open').hidden = !id;
     $('youtube-open').removeAttribute('href');
     if (id) $('youtube-open').href = `https://www.youtube.com/watch?v=${id}`;
     $('preview-help').textContent = format === '16:9' ? 'Formato horizontal 16:9. Se respeta la proporción del archivo.' : 'Formato vertical 9:16. Se respeta la proporción del archivo.';
-    if (media && media.video) {
+    content.append(thumbnail({thumbnail_url: $('thumbnail_url').value, title: $('short-title').value}, 'detail-thumbnail'));
+    if (media && media.video && (media.local || (!id && !tiktok))) {
       previewPlaceholder('Archivo disponible', 'Carga la vista previa para revisar el vídeo.');
       const load = node('button', 'button button-secondary', 'Cargar vista previa');
       load.type = 'button';
@@ -348,19 +377,24 @@
         content.replaceChildren(video);
       });
       content.append(load);
-    } else if (id) {
-      previewPlaceholder('Vista previa de YouTube', 'Solo se conecta con YouTube cuando tú lo solicitas.');
+    } else if (id || tiktok) {
+      const platform = id ? 'YouTube' : 'TikTok';
+      previewPlaceholder(`Vista previa de ${platform}`, `Solo se conecta con ${platform} cuando tú lo solicitas.`);
       const load = node('button', 'button button-secondary', 'Cargar vista previa');
       load.type = 'button';
       load.addEventListener('click', () => {
         const frame = node('iframe');
-        frame.title = 'Vista previa de YouTube';
+        frame.title = `Vista previa de ${platform}: ${$('short-title').value || 'Vídeo'}`;
         frame.referrerPolicy = 'strict-origin-when-cross-origin';
         frame.allow = 'encrypted-media; picture-in-picture; fullscreen';
         frame.allowFullscreen = true;
-        frame.src = `https://www.youtube-nocookie.com/embed/${id}`;
+        frame.src = id ? `https://www.youtube-nocookie.com/embed/${id}?autoplay=0` : `https://www.tiktok.com/player/v1/${tiktok}?autoplay=0&loop=0`;
         content.replaceChildren(frame);
-        $('preview-help').textContent = 'Reproductor de YouTube cargado. Si el vídeo no permite inserción, ábrelo con el enlace inferior.';
+        const restore = node('button', 'button button-secondary', 'Volver a la portada');
+        restore.type = 'button';
+        restore.addEventListener('click', renderPreview);
+        sourceLinks.append(restore);
+        $('preview-help').textContent = `Reproductor de ${platform} solicitado. Si no está disponible, abre el original con el enlace inferior.`;
       });
       content.append(load);
     } else if (media) {
@@ -368,18 +402,14 @@
     } else {
       previewPlaceholder('Vista previa pendiente', 'Añade el vídeo del creador o un enlace de YouTube en los detalles.');
     }
-    if (media && !media.video) {
-      const link = node('a', 'external-link', 'Abrir vista previa externa ↗');
-      link.href = media.url;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      content.append(link);
-    }
+
     if ((youtube && !id) || (preview && !media)) $('preview-help').textContent = 'Hay un enlace no válido. Revisa los detalles; no se cargará contenido desde ese enlace.';
   }
   function validateLinks() {
     const youtube = $('youtube_url');
     const preview = $('preview_url');
+    const cover = $('thumbnail_url');
+    cover.setCustomValidity(cover.value && !thumbnailURL(cover.value) ? 'Usa una URL HTTPS de imagen, sin credenciales y de hasta 4096 caracteres.' : '');
     youtube.setCustomValidity(youtube.value.trim() && !youtubeId(youtube.value.trim()) ? 'Introduce un enlace válido a un vídeo de YouTube.' : '');
     preview.setCustomValidity(preview.value.trim() && !safePreview(preview.value.trim()) ? 'Usa un enlace HTTPS o una ruta local /media/.' : '');
   }
@@ -864,10 +894,10 @@
   editor.addEventListener('submit', saveShort);
   editor.addEventListener('input', (event) => {
     if (event.target.id === 'short-title') { event.target.setCustomValidity(''); $('detail-title').textContent = event.target.value || 'Nuevo vídeo'; }
-    if (event.target.id === 'youtube_url' || event.target.id === 'preview_url') event.target.setCustomValidity('');
+    if (['youtube_url', 'preview_url', 'thumbnail_url'].includes(event.target.id)) event.target.setCustomValidity('');
     updateDirty();
   });
-  for (const id of ['youtube_url', 'preview_url', 'format', 'social_account_id', 'language', 'channel']) $(id).addEventListener('change', () => { validateLinks(); renderPreview(); });
+  for (const id of ['youtube_url', 'preview_url', 'thumbnail_url', 'format', 'social_account_id', 'language', 'channel']) $(id).addEventListener('change', () => { validateLinks(); renderPreview(); });
   $('metric-form').addEventListener('input', () => { state.metricDirty = true; });
   $('metric-form').addEventListener('submit', saveMetric);
   window.addEventListener('beforeunload', (event) => {

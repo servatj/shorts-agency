@@ -11,7 +11,7 @@ from reference_store import ReferenceStore
 from web_media import open_media, byte_range
 from web_validation import ValidationError, short_fields, metric_fields
 
-CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https: data:; media-src 'self' https:; frame-src https://www.youtube-nocookie.com; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'"
+CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https: data:; media-src 'self' https:; frame-src https://www.youtube-nocookie.com https://www.tiktok.com; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'"
 
 
 class RequestError(Exception):

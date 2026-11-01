@@ -46,6 +46,7 @@ docs/*
 !docs/CLOUD_MIGRATION.md
 !docs/PUBLICATION_STATE.md
 !docs/CHANNEL_DATA.md
+!docs/PREVIEWS.md
 !docs/github-actions-tests.yml.example
 
 # Local tooling and build artifacts
