@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from web_auth import Auth, ORIGINS, cookie, equal
-from web_store import WebStore
+from web_store import PublishedScriptLocked, WebStore
 from reference_store import ReferenceStore
 from web_media import open_media, byte_range
 from web_validation import ValidationError, short_fields, metric_fields
@@ -32,7 +32,7 @@ def unique_object(pairs):
 def build_server(api, host, port, *, root=None):
     root = Path(root) if root is not None else Path(__file__).resolve().parent
     static = {'/': ('index.html', 'text/html; charset=utf-8'), '/static/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/static/style.css': ('style.css', 'text/css; charset=utf-8')}
-    for page in ('/social', '/scripts'):
+    for page in ('/social', '/scripts', '/videos', '/references'):
         static[page] = static['/']
 
     store = WebStore(api.store.database_path)
@@ -221,6 +221,8 @@ def build_server(api, host, port, *, root=None):
                 self.respond(408, {'error': 'request_timeout'})
             except ValidationError as error:
                 self.respond(400, {'error': str(error)})
+            except PublishedScriptLocked as error:
+                self.respond(409, {'error': str(error)})
             except RequestError as error:
                 self.respond(error.status, {'error': error.error})
             except (FileNotFoundError, KeyError):

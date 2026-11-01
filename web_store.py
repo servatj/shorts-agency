@@ -11,6 +11,13 @@ def now():
     return datetime.now(UTC).isoformat()
 
 
+class PublishedScriptLocked(Exception):
+    """A published short's script cannot be replaced or unlocked."""
+
+    def __init__(self):
+        super().__init__('published_script_locked')
+
+
 class WebStore:
     def __init__(self, path):
         self.path = path
@@ -61,7 +68,14 @@ class WebStore:
             row = db.execute('SELECT * FROM web_shorts WHERE id=?', (short_id,)).fetchone()
             if row is None:
                 raise KeyError(short_id)
-            document = {**json.loads(row['document']), **fields, 'updated_at': now()}
+            existing = json.loads(row['document'])
+            # Check the fresh row under the write lock, before merging any fields.
+            if existing.get('status') == 'published' and (
+                ('script' in fields and fields['script'] != existing.get('script', ''))
+                or ('status' in fields and fields['status'] != 'published')
+            ):
+                raise PublishedScriptLocked()
+            document = {**existing, **fields, 'updated_at': now()}
             db.execute('UPDATE web_shorts SET document=? WHERE id=?', (json.dumps(document), short_id))
         return {**document, 'id': short_id}
 

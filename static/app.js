@@ -9,7 +9,9 @@
   const editor = $('editor-form');
   const refs = {items: [], current: null, loaded: false, mode: false, request: 0};
   const socials = {items: [], loaded: false, request: 0};
-  let libraryMode = location.pathname === '/social' ? 'social' : location.pathname === '/scripts' ? 'scripts' : 'owned';
+  let libraryMode = location.pathname === '/references' ? 'references' : location.pathname === '/' ? 'home' : 'owned';
+  let selectedChannel = '', activeSection = 'editor', readingScript = false, recovery = false;
+  const initialSocial = location.pathname === '/social';
   const platforms = {instagram: 'Instagram', tiktok: 'TikTok', youtube: 'YouTube'};
   const referenceTypes = {short: 'Short', video: 'Vídeo', live: 'Directo', post: 'Publicación'};
   const numberFormat = new Intl.NumberFormat('es-ES', {maximumFractionDigits: 2});
@@ -97,10 +99,12 @@
     $('password').value = '';
     if (!state.loaded) await loadList();
     if (!socials.loaded) await loadSocials();
-    switchLibrary(libraryMode);
+    if (state.current && hasEdits()) { $('detail').hidden = false; $('owned-library').hidden = true; }
+    else switchLibrary(libraryMode, false);
+    if (initialSocial && !hasEdits()) toggleChannels(true);
     if (state.authenticated) $('workspace').hidden = false;
   }
-  function hasEdits() { return state.dirty || state.metricDirty; }
+  function hasEdits() { return state.dirty || state.metricDirty || recovery; }
   function mayLeave() {
     if (state.busy) return false;
     return !hasEdits() || window.confirm('Hay cambios sin guardar. ¿Quieres descartarlos y continuar?');
@@ -111,7 +115,8 @@
     data.title = data.title.trim();
     data.youtube_url = data.youtube_url.trim();
     data.preview_url = data.preview_url.trim();
-    data.tags = data.tags.split(',').map((tag) => tag.trim()).filter(Boolean);
+    const originalTags = state.current?.tags;
+    data.tags = Array.isArray(originalTags) && data.tags === originalTags.join(', ') ? [...originalTags] : data.tags.split(',').map((tag) => tag.trim()).filter(Boolean);
     data.social_account_id = data.social_account_id || null;
     return data;
   }
@@ -131,40 +136,54 @@
     $('save-metric').disabled = busy;
     $('save-short').textContent = busy ? 'Guardando…' : 'Guardar cambios';
     editor.setAttribute('aria-busy', String(busy));
+    applyLock();
   }
   function statusBadge(status) {
     const badge = node('span', 'status-badge', labels[status] || 'Sin estado');
     badge.dataset.status = status || '';
     return badge;
   }
+  function accountFor(item) { return socials.items.find(a => a.id === item.social_account_id); }
+  function channelText(item) { const a = accountFor(item); return a ? `${a.name} · ${platforms[a.platform] || a.platform}` : item.channel || 'Sin canal'; }
+  function channelMatch(item) { return !selectedChannel || (selectedChannel === '__none' ? !item.social_account_id : item.social_account_id === selectedChannel); }
   function renderList() {
     const query = $('search').value.trim().toLocaleLowerCase('es');
     const filter = $('status-filter').value;
-    const items = state.items.filter((item) => (!filter || item.status === filter) && (!query || [item.title, item.script, item.channel].some((v) => String(v || '').toLocaleLowerCase('es').includes(query))));
+    const base = state.items.filter(item => channelMatch(item) && (!query || [item.title, item.script, item.channel, channelText(item), accountFor(item)?.handle].some(v => String(v || '').toLocaleLowerCase('es').includes(query))));
+    const items = base.filter(item => !filter || item.status === filter);
     $('total-count').textContent = String(state.items.length);
-    $('list-caption').textContent = `${items.length} ${items.length === 1 ? 'pieza' : 'piezas'}${filter || query ? ' en esta vista' : ' en el estudio'}`;
-    const list = $('short-list');
-    list.replaceChildren();
-    if (!items.length) {
-      const li = node('li', 'sidebar-message muted', state.items.length ? 'No hay piezas con estos filtros.' : 'Tu biblioteca está vacía. Crea el primer borrador con «Nuevo».');
-      list.append(li);
-      return;
+    $('list-caption').textContent = `${items.length} de ${state.items.length} vídeos propios`;
+    $('status-tabs').replaceChildren();
+    for (const option of $('status-filter').options) {
+      const count = base.filter(i => !option.value || i.status === option.value).length;
+      const button = node('button', 'filter-tab', `${option.text} · ${count}`);
+      button.type = 'button'; button.dataset.filter = option.value;
+      button.setAttribute('aria-pressed', String(option.value === filter));
+      button.addEventListener('click', () => { $('status-filter').value = option.value; renderList(); });
+      $('status-tabs').append(button);
     }
+    $('short-list').replaceChildren();
+    $('empty-detail').hidden = state.items.length > 0;
+    if (!items.length && state.items.length) $('short-list').append(node('li', 'empty-row', 'No hay vídeos con estos filtros.'));
     for (const item of items) {
-      const li = node('li');
-      const button = node('button', 'short-item');
-      button.type = 'button';
-      const selected = state.current && String(state.current.id) === String(item.id);
-      button.classList.toggle('selected', Boolean(selected));
-      if (selected) button.setAttribute('aria-current', 'true');
-      const top = node('span', 'short-item-top');
-      top.append(statusBadge(item.status), node('span', 'short-item-format', item.format || '—'));
-      button.append(top, node('span', 'short-item-title', item.title || 'Sin título'), node('span', 'short-item-meta', `${item.channel || 'Sin canal'} · ${item.language === 'en' ? 'EN' : 'ES'}`));
-      if (libraryMode === 'scripts') button.append(node('span', 'short-item-meta', (item.script || '').trim() ? 'Guion disponible · Leer o editar' : 'Sin guion · Pendiente de escribir'));
+      const li = node('li'); const button = node('button', 'short-item'); button.type = 'button';
+      const title = node('span', 'row-title');
+      title.append(node('span', 'thumbnail', item.format === '16:9' ? '▭' : '▯'), node('strong', '', item.title || 'Sin título'));
+      button.append(title, node('span', 'row-channel', channelText(item)), statusBadge(item.status), node('span', 'row-arrow', '›'));
       button.addEventListener('click', () => selectShort(item.id));
-      li.append(button);
-      list.append(li);
+      button.addEventListener('focus', () => renderInspector(item));
+      button.addEventListener('mouseenter', () => renderInspector(item));
+      li.append(button); $('short-list').append(li);
     }
+    renderInspector(items[0]);
+  }
+  function renderInspector(item) {
+    const box = $('inspector'); box.replaceChildren(node('p', 'muted', 'Vista del guion'));
+    if (!item) { box.append(node('h2', '', 'Espacio para tu próxima historia'), node('p', 'muted', 'Selecciona un vídeo o crea un borrador.')); return; }
+    box.append(node('h2', '', item.title), node('p', 'inspector-script', item.script ? item.script.slice(0, 360) + (item.script.length > 360 ? '…' : '') : 'Guion pendiente de escribir.'));
+    const placeholder = node('div', 'neutral-preview'); placeholder.append(node('span', '', '▷'), node('p', '', item.preview_url || youtubeId(item.youtube_url) ? 'Vista previa disponible en la ficha' : 'Vista previa pendiente'));
+    const open = node('button', 'button button-primary full-width', 'Abrir vídeo'); open.type = 'button'; open.addEventListener('click', () => selectShort(item.id));
+    box.append(placeholder, statusBadge(item.status), open);
   }
   async function loadList() {
     $('refresh-list').disabled = true;
@@ -189,6 +208,8 @@
   }
   function fillRecord(record) {
     state.current = record;
+    const locked = record.status === 'published';
+    $('status').replaceChildren(...Object.entries(labels).filter(([key]) => locked ? key === 'published' : key !== 'published').map(([key, text]) => new Option(text, key)));
     // Preserve an association even if its account was removed from the inventory.
     if (record.social_account_id && !Array.from($('social_account_id').options).some(o => o.value === record.social_account_id)) {
       const option = node('option', '', record.social_account_id + ' · No disponible en inventario');
@@ -205,17 +226,25 @@
     state.baseline = JSON.stringify(readEditor());
     updateDirty();
     $('detail-title').textContent = record.title || 'Nuevo vídeo';
-    $('record-label').textContent = record.id == null ? 'NUEVA PIEZA' : 'PIEZA EDITORIAL';
     $('record-updated').textContent = record.updated_at ? `Actualizado el ${dateText(record.updated_at)}` : 'Todavía no guardado';
     $('detail-status').textContent = labels[record.status] || 'Borrador';
     $('detail-status').dataset.status = record.status || 'draft';
     $('empty-detail').hidden = true;
     $('detail').hidden = false;
+    $('library-home').classList.remove('active');
+    $('library-owned').classList.add('active');
+    $('library-home').setAttribute('aria-current', 'false');
+    $('library-owned').setAttribute('aria-current', 'page');
+    $('owned-library').hidden = true;
+    $('references-view').hidden = true;
+    readingScript = locked;
+    applyLock();
+    showSection(activeSection);
     renderPreview();
     renderList();
   }
   async function selectShort(id) {
-    if (state.current && String(state.current.id) === String(id)) return;
+    if (!$('detail').hidden && state.current && String(state.current.id) === String(id)) return;
     if (!mayLeave()) return;
     const request = ++state.selectionRequest;
     const editorAtRequest = JSON.stringify(readEditor());
@@ -228,7 +257,9 @@
       // Do not overwrite edits made while the request was in flight.
       const changedDuringLoad = JSON.stringify(readEditor()) !== editorAtRequest || JSON.stringify(Array.from(new FormData($('metric-form')).entries())) !== metricsAtRequest;
       if (changedDuringLoad && !window.confirm('Has editado mientras se cargaba otra pieza. ¿Descartar esos cambios y abrirla?')) { message('global-message'); return; }
+      discardEdits();
       ++state.metricRequest;
+      libraryMode = 'owned';
       fillRecord(record);
       resetMetricForm();
       message('global-message');
@@ -239,9 +270,11 @@
   }
   function newShort() {
     if (!mayLeave()) return;
+    discardEdits();
     ++state.selectionRequest;
     ++state.metricRequest;
-    fillRecord({title: '', script: '', status: 'draft', language: 'es', format: '9:16', tags: []});
+    libraryMode = 'owned';
+    fillRecord({title: '', script: '', status: 'draft', language: 'es', format: '9:16', tags: [], social_account_id: selectedChannel && selectedChannel !== '__none' ? selectedChannel : null});
     resetMetricForm();
     message('global-message');
     showSection('editor');
@@ -286,6 +319,11 @@
     const format = $('format').value;
     $('preview-stage').classList.toggle('landscape', format === '16:9');
     $('preview-format').textContent = format;
+    let facts = $('preview-facts');
+    if (!facts) { facts = node('dl', 'preview-facts'); facts.id = 'preview-facts'; $('preview-stage').parentElement.append(facts); }
+    facts.replaceChildren();
+    const selected = socials.items.find(a => a.id === $('social_account_id').value);
+    for (const [key, value] of [['Idioma', $('language').value === 'en' ? 'Inglés' : 'Español'], ['Formato', format], ['Canal', selected ? `${selected.name} · ${platforms[selected.platform] || selected.platform}` : $('channel').value || 'Sin canal']]) facts.append(node('dt', '', key), node('dd', '', value));
     const youtube = $('youtube_url').value.trim();
     const preview = $('preview_url').value.trim();
     const id = youtubeId(youtube);
@@ -344,15 +382,17 @@
     youtube.setCustomValidity(youtube.value.trim() && !youtubeId(youtube.value.trim()) ? 'Introduce un enlace válido a un vídeo de YouTube.' : '');
     preview.setCustomValidity(preview.value.trim() && !safePreview(preview.value.trim()) ? 'Usa un enlace HTTPS o una ruta local /media/.' : '');
   }
-  async function saveShort(event) {
+  async function saveShort(event, publish = false) {
     event.preventDefault();
     if (state.busy || !state.current) return;
     validateLinks();
-    if (!editor.reportValidity()) return;
+    if (!editor.checkValidity()) { showSection($('short-title').validity.valid ? 'summary' : 'editor'); editor.reportValidity(); return; }
     const body = readEditor();
-    if (!body.title) { $('short-title').setCustomValidity('Escribe un título de trabajo.'); $('short-title').reportValidity(); return; }
+    if (!body.title) { $('short-title').setCustomValidity('Escribe un título de trabajo.'); showSection('editor'); $('short-title').reportValidity(); return; }
     const creating = state.current.id == null;
     if (creating) body.status = 'draft';
+    else if (publish) body.status = 'published';
+    if (state.current.status === 'published') { delete body.script; delete body.status; }
     ++state.selectionRequest;
     setBusy(true);
     message('global-message');
@@ -367,22 +407,46 @@
       fillRecord(record);
       message('global-message', creating ? 'Borrador creado y comprobado. No se ha publicado en ninguna plataforma.' : 'Cambios guardados y comprobados. No se ha publicado en ninguna plataforma.', 'success');
       $('save-state').textContent = 'Guardado';
-    } catch (error) { message('global-message', error.message, 'error'); }
+    } catch (error) {
+      if (error.status === 409) {
+        recovery = true;
+        $('recovery-script').value = body.script ?? $('script').value;
+        $('recovery-data').value = JSON.stringify(body, null, 2);
+        $('recovery-panel').hidden = false;
+        try { const fresh = await api(`/v1/shorts/${encodeURIComponent(state.current.id)}`); fillRecord(fresh); const index = state.items.findIndex(i => i.id === fresh.id); if (index >= 0) state.items[index] = fresh; renderList(); } catch (_) { /* Keep the recovery copy even if reloading fails. */ }
+        message('global-message', 'Conflicto: el vídeo ha cambiado o ya está publicado. No se guardaron tus cambios. Tu texto está conservado en «Copia recuperable»; revisa el estado actualizado.', 'error');
+      } else message('global-message', error.message, 'error');
+    }
     finally { setBusy(false); }
   }
+  function applyLock() {
+    const locked = state.current?.status === 'published';
+    $('script').readOnly = locked;
+    $('status').disabled = state.busy || locked || state.current?.id == null;
+    $('script-lock').hidden = !locked;
+    $('edit-script').hidden = locked || !readingScript;
+    $('script-read-tab').hidden = locked || readingScript;
+    $('script').hidden = locked || readingScript;
+    $('script-reading').hidden = !locked && !readingScript;
+    $('script-reading').textContent = $('script').value || 'Guion pendiente de escribir.';
+    $('save-short').hidden = locked && activeSection !== 'summary';
+    $('save-short').textContent = state.busy ? 'Guardando…' : locked ? 'Guardar metadatos' : 'Guardar cambios';
+    $('publish-short').hidden = locked || state.current?.id == null;
+    $('publication-state').textContent = locked ? 'Publicación registrada. Guion bloqueado permanentemente.' : state.current?.id == null ? 'Guarda primero el borrador.' : '';
+  }
   function showSection(section) {
-    const metrics = section === 'metrics';
-    const reading = section === 'script-read';
-    $('editor-panel').hidden = metrics || reading;
-    $('metrics-panel').hidden = !metrics;
-    $('script-read-panel').hidden = !reading;
-    if (reading) $('script-reading').textContent = $('script').value || 'Sin guion. Abre Edición para escribirlo.';
-    for (const name of ['editor', 'metrics', 'script-read']) {
-      const active = name === section;
-      $(`${name}-tab`).classList.toggle('active', active);
-      $(`${name}-tab`).setAttribute('aria-pressed', String(active));
+    if (section === 'script-read') { readingScript = true; section = 'editor'; }
+    activeSection = section;
+    for (const name of ['summary', 'editor', 'publication', 'metrics']) {
+      $(`${name}-panel`).hidden = name !== section;
+      $(`${name}-tab`).classList.toggle('active', name === section);
+      $(`${name}-tab`).setAttribute('aria-pressed', String(name === section));
     }
-    if (metrics) loadMetrics();
+    // The title is also editable from metadata without duplicating its value.
+    (section === 'summary' ? $('summary-panel') : $('editor-panel')).prepend($('draft-title-field'));
+    $('draft-title-field').hidden = state.current?.status === 'published' && section !== 'summary';
+    applyLock();
+    if (section === 'metrics') loadMetrics();
   }
   function metricValue(value, suffix = '') {
     return value == null || value === '' || !Number.isFinite(Number(value)) ? '—' : `${numberFormat.format(Number(value))}${suffix}`;
@@ -461,7 +525,9 @@
     setBusy(true);
     $('save-metric').textContent = 'Guardando captura…';
     try {
-      await api(`/v1/shorts/${encodeURIComponent(state.current.id)}/metrics`, {method: 'POST', body});
+      const written = await api(`/v1/shorts/${encodeURIComponent(state.current.id)}/metrics`, {method: 'POST', body});
+      const verified = await api(`/v1/shorts/${encodeURIComponent(state.current.id)}/metrics`);
+      if (!Array.isArray(verified.items) || !verified.items.some(item => item.id === written.id && metricFields.every(name => item[name] === body[name]))) throw new Error('La captura se envió, pero no se pudo comprobar. Actualiza el historial antes de volver a enviarla para evitar duplicados.');
       resetMetricForm();
       await loadMetrics();
       message('global-message', 'Captura guardada. Los valores vacíos se han conservado como no disponibles.', 'success');
@@ -478,27 +544,35 @@
       return url.href;
     } catch (_) { return null; }
   }
+  function toggleChannels(open) {
+    $('channel-menu').hidden = !open; $('channel-toggle').setAttribute('aria-expanded', String(open));
+    if (open) { renderSocials(); $('social-search').focus(); }
+  }
   function renderSocials() {
     const query = $('social-search').value.trim().toLocaleLowerCase('es');
-    const platform = $('social-platform').value;
-    const items = socials.items.filter(a => (!platform || a.platform === platform) && (!query || [a.name, a.handle, a.id].some(v => String(v || '').toLocaleLowerCase('es').includes(query))));
-    $('social-count').textContent = String(socials.items.length);
-    $('social-caption').textContent = `${items.length} de ${socials.items.length} cuentas · ${Object.keys(platforms).map(p => `${socials.items.filter(a => a.platform === p).length} ${platforms[p]}`).join(' · ')}`;
-    $('social-list').replaceChildren();
-    if (!items.length) $('social-list').append(node('li', 'muted', 'No hay cuentas con estos filtros.'));
-    for (const account of items) {
-      const card = node('li', 'social-card');
-      card.append(node('p', 'eyebrow', platforms[account.platform] || account.platform), node('h2', '', account.name), node('p', '', account.handle == null ? 'Handle pendiente de confirmar' : account.handle), node('p', 'small muted', `ID: ${account.id}`), node('p', '', account.ownership === 'user_confirmed' ? 'Propiedad: confirmada por el usuario' : `Propiedad: ${account.ownership || 'pendiente'}`), node('p', '', `Analítica no conectada · ${account.sync_status}`));
-      const evidence = account.analytics;
-      card.append(node('p', 'social-evidence', evidence && evidence.subscribers != null ? `${numberFormat.format(evidence.subscribers)} suscriptores · Observación de captura, NO en directo. ${evidence.observed_at ? dateText(evidence.observed_at) : 'Fecha de captura desconocida'}.` : 'Sin mediciones aportadas. No equivale a cero.'));
-      card.append(node('p', 'small muted', `Fuente del inventario: ${account.source}`));
-      const url = profileURL(account);
-      if (url) {
-        const link = node('a', 'external-link', 'Abrir perfil ↗');
-        link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer'; card.append(link);
-      } else card.append(node('p', 'muted', 'URL pendiente de confirmar · Sin enlace disponible'));
-      $('social-list').append(card);
+    const filtered = socials.items.filter(a => [a.name, a.handle, a.platform, platforms[a.platform]].some(v => String(v || '').toLocaleLowerCase('es').includes(query)));
+    const box = $('channel-options'); box.replaceChildren();
+    const options = [{id: '', name: 'Todos los canales'}, {id: '__none', name: 'Sin canal'}, ...filtered];
+    for (const a of options) {
+      const row = node('div', 'channel-option'); const button = node('button', 'channel-choice'); button.type = 'button';
+      button.dataset.channel = a.id; button.setAttribute('aria-pressed', String(selectedChannel === a.id));
+      button.append(node('span', 'monogram', a.platform ? a.name.slice(0, 2).toUpperCase() : '▦'));
+      const label = node('span', 'channel-label', a.name);
+      if (a.platform) label.append(node('small', '', `${platforms[a.platform] || a.platform}${a.handle ? ' · ' + a.handle : ' · Handle pendiente'}`));
+      button.append(label, node('span', 'channel-count', String(state.items.filter(i => a.id === '' || (a.id === '__none' ? !i.social_account_id : i.social_account_id === a.id)).length)));
+      button.addEventListener('click', () => {
+        if (selectedChannel !== a.id && !mayLeave()) return;
+        if (selectedChannel !== a.id) { discardEdits(); selectedChannel = a.id; switchLibrary('owned', false); }
+        $('channel-toggle').textContent = `${a.name}${a.platform ? ' · ' + platforms[a.platform] : ''} ⌄`;
+        toggleChannels(false); $('channel-toggle').focus(); renderList();
+      });
+      row.append(button);
+      const url = a.platform && profileURL(a);
+      if (url) { const link = node('a', 'profile-link', '↗'); link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.setAttribute('aria-label', `Abrir perfil de ${a.name} en ${platforms[a.platform]}`); row.append(link); }
+      if (a.analytics?.subscribers != null) row.title = `${numberFormat.format(a.analytics.subscribers)} suscriptores · Observación de captura, NO en directo · ${a.analytics.observed_at ? dateText(a.analytics.observed_at) : 'Fecha de captura desconocida'}`;
+      box.append(row);
     }
+    $('social-caption').textContent = `${filtered.length} de ${socials.items.length} canales · Inventario, sin conexión a plataformas`;
   }
   async function loadSocials() {
     const request = ++socials.request;
@@ -515,11 +589,11 @@
       for (const account of socials.items) select.append(new Option(`${platforms[account.platform]} · ${account.name} · ${account.handle == null ? 'handle desconocido' : account.handle}`, account.id));
       if (selected && !Array.from(select.options).some(o => o.value === selected)) select.append(new Option(selected + ' · No disponible en inventario', selected));
       select.value = selected;
-      renderSocials(); message('social-message');
+      renderSocials(); renderList(); message('social-message');
       $('social-selector-help').textContent = 'Vinculación editorial, no conexión a la plataforma. No cambia el canal ni agrupa marcas. Los nuevos registros se guardan siempre como borrador.';
     } catch (error) {
       message('social-message', error.message, 'error');
-      $('social-selector-help').textContent = 'No se pudo cargar el inventario. Puedes editar el guion; vuelve a Mis redes para reintentar.';
+      $('social-selector-help').textContent = 'No se pudo cargar el inventario. Puedes editar el guion; usa Actualizar inventario para reintentar.';
     } finally { if (request === socials.request) $('refresh-social').disabled = false; }
   }
 
@@ -617,46 +691,52 @@
     } catch (error) { if (request === refs.request) message('reference-list-message', error.message, 'error'); }
     finally { if (request === refs.request) $('refresh-references').disabled = false; }
   }
-  function switchLibrary(mode) {
-    if (state.busy) return;
-    if (typeof mode === 'boolean') mode = mode ? 'references' : 'owned';
-    libraryMode = mode;
-    const referenceMode = mode === 'references';
-    const socialMode = mode === 'social';
-    refs.mode = referenceMode;
-    ++state.selectionRequest;
-    $('owned-library').hidden = referenceMode || socialMode;
-    $('reference-library').hidden = !referenceMode;
-    $('reference-workspace').hidden = !referenceMode;
-    $('social-workspace').hidden = !socialMode;
-    $('detail').hidden = referenceMode || socialMode || !state.current;
-    $('empty-detail').hidden = referenceMode || socialMode || Boolean(state.current);
-    $('library-heading').textContent = mode === 'scripts' ? 'Guiones' : 'Biblioteca';
-    $('library-label').textContent = mode === 'scripts' ? 'TODAS TUS PIEZAS · CON Y SIN GUION' : 'PRODUCCIÓN';
-    $('new-short').textContent = mode === 'scripts' ? '+ Nuevo guion' : '+ Nuevo';
-    history.replaceState(null, '', socialMode ? '/social' : mode === 'scripts' ? '/scripts' : '/');
-    for (const id of ['owned', 'scripts', 'social', 'references']) {
-      const active = id === mode;
-      $('library-' + id).classList.toggle('active', active); $('library-' + id).setAttribute('aria-pressed', String(active));
+  function discardEdits() {
+    if (state.current && state.baseline && state.dirty) {
+      const baseline = JSON.parse(state.baseline);
+      for (const name of fields) editor.elements.namedItem(name).value = name === 'tags' ? baseline[name].join(', ') : baseline[name] ?? '';
     }
-    if (referenceMode) {
-      $('preview-content').replaceChildren();
-      if (!refs.loaded) loadReferences();
-    } else {
-      $('reference-preview').replaceChildren();
-      if (state.current) renderPreview();
-    }
-    if (referenceMode && refs.current) selectReference(refs.current);
-    if (socialMode) { $('preview-content').replaceChildren(); if (!socials.loaded) loadSocials(); }
+    state.dirty = false; resetMetricForm(); recovery = false; $('recovery-panel').hidden = true;
+  }
+  function switchLibrary(mode, guard = true) {
+    if (state.busy || (guard && !mayLeave())) return;
+    if (guard) discardEdits();
+    libraryMode = mode; refs.mode = mode === 'references'; ++state.selectionRequest;
+    $('owned-library').hidden = refs.mode; $('references-view').hidden = !refs.mode;
+    $('reference-library').hidden = !refs.mode; $('reference-workspace').hidden = !refs.mode;
+    $('detail').hidden = true;
+    $('library-heading').textContent = mode === 'home' ? 'Tu mesa de trabajo' : 'Tus vídeos';
+    for (const name of ['home', 'owned']) { $('library-' + name).classList.toggle('active', name === mode || name === 'owned' && refs.mode); $('library-' + name).setAttribute('aria-current', name === mode ? 'page' : 'false'); }
+    history.replaceState(null, '', refs.mode ? '/references' : mode === 'home' ? '/' : '/videos');
+    $('preview-content').replaceChildren(); $('reference-preview').replaceChildren();
+    if (refs.mode) { if (!refs.loaded) loadReferences(); else if (refs.current) selectReference(refs.current); }
     renderList();
   }
-  $('library-owned').addEventListener('click', () => switchLibrary(false));
-  $('library-references').addEventListener('click', () => switchLibrary(true));
-  $('library-scripts').addEventListener('click', () => switchLibrary('scripts'));
-  $('library-social').addEventListener('click', () => switchLibrary('social'));
+  $('library-home').addEventListener('click', () => switchLibrary('home'));
+  $('library-owned').addEventListener('click', () => switchLibrary('owned'));
+  $('back-videos').addEventListener('click', () => switchLibrary('owned'));
+  $('library-references').addEventListener('click', () => switchLibrary('references'));
+  $('channel-toggle').addEventListener('click', () => toggleChannels($('channel-menu').hidden));
   $('social-search').addEventListener('input', renderSocials);
-  $('social-platform').addEventListener('change', renderSocials);
   $('refresh-social').addEventListener('click', loadSocials);
+  document.addEventListener('click', event => { if (!event.target.closest('.channel-control')) toggleChannels(false); });
+  $('channel-menu').addEventListener('keydown', event => {
+    if (event.key === 'Escape') { toggleChannels(false); $('channel-toggle').focus(); }
+    if (['ArrowDown', 'ArrowUp'].includes(event.key)) {
+      const controls = [$('social-search'), ...$('channel-options').querySelectorAll('button')];
+      const index = controls.indexOf(document.activeElement);
+      controls[(index + (event.key === 'ArrowDown' ? 1 : controls.length - 1)) % controls.length].focus(); event.preventDefault();
+    }
+  });
+  $('dismiss-recovery').addEventListener('click', () => { if (confirm('¿Descartar la copia recuperable sin guardar?')) { recovery = false; $('recovery-panel').hidden = true; } });
+  $('summary-tab').addEventListener('click', () => showSection('summary'));
+  $('publication-tab').addEventListener('click', () => showSection('publication'));
+  $('edit-script').addEventListener('click', () => { readingScript = false; applyLock(); $('script').focus(); });
+  $('publish-short').addEventListener('click', () => {
+    if (state.busy || !state.current?.id || state.current.status === 'published') return;
+    if (!confirm('Solo se registrará el estado: NO se publica en ninguna plataforma. El guion quedará bloqueado de forma irreversible. Se guardarán también los cambios actuales. ¿Registrar como publicado?')) return;
+    saveShort({preventDefault() {}}, true);
+  });
   $('reference-search').addEventListener('input', renderReferences);
   $('reference-type').addEventListener('change', renderReferences);
   $('reference-sort').addEventListener('change', renderReferences);
@@ -683,10 +763,13 @@
       state.items = []; state.current = null; state.loaded = false; state.baseline = ''; state.dirty = false; state.metricDirty = false;
       ++refs.request; refs.items = []; refs.current = null; refs.loaded = false;
       ++socials.request; socials.items = []; socials.loaded = false;
-      $('social-list').replaceChildren(); $('social-count').textContent = '0';
+      $('channel-options').replaceChildren(); selectedChannel = ''; recovery = false;
+      $('channel-toggle').textContent = 'Todos los canales ⌄';
+      $('social-search').value = '';
+      toggleChannels(false);
       $('social_account_id').replaceChildren(new Option('Sin cuenta asociada', ''));
       $('reference-detail').hidden = true; $('reference-empty').hidden = false;
-      renderReferences(); switchLibrary(false);
+      renderReferences(); switchLibrary('home', false);
       editor.reset(); resetMetricForm(); renderList();
       $('preview-content').replaceChildren();
       $('metrics-history').replaceChildren();
@@ -705,26 +788,25 @@
   $('editor-tab').addEventListener('click', () => showSection('editor'));
   $('script-read-tab').addEventListener('click', () => showSection('script-read'));
   $('metrics-tab').addEventListener('click', () => showSection('metrics'));
-  $('save-short').addEventListener('click', () => showSection('editor'));
   editor.addEventListener('submit', saveShort);
   editor.addEventListener('input', (event) => {
-    if (event.target.id === 'short-title') event.target.setCustomValidity('');
+    if (event.target.id === 'short-title') { event.target.setCustomValidity(''); $('detail-title').textContent = event.target.value || 'Nuevo vídeo'; }
     if (event.target.id === 'youtube_url' || event.target.id === 'preview_url') event.target.setCustomValidity('');
     updateDirty();
   });
-  for (const id of ['youtube_url', 'preview_url', 'format']) $(id).addEventListener('change', () => { validateLinks(); renderPreview(); });
+  for (const id of ['youtube_url', 'preview_url', 'format', 'social_account_id', 'language', 'channel']) $(id).addEventListener('change', () => { validateLinks(); renderPreview(); });
   $('metric-form').addEventListener('input', () => { state.metricDirty = true; });
   $('metric-form').addEventListener('submit', saveMetric);
   window.addEventListener('beforeunload', (event) => {
     if (hasEdits() || state.busy) { event.preventDefault(); event.returnValue = ''; }
   });
   document.addEventListener('keydown', (event) => {
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's' && state.authenticated && state.current && ['owned', 'scripts'].includes(libraryMode)) {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's' && state.authenticated && state.current && !$('detail').hidden) {
       event.preventDefault();
-      if (!state.busy) { showSection('editor'); editor.requestSubmit(); }
+      if (!state.busy && (state.current.status !== 'published' || activeSection === 'summary')) editor.requestSubmit();
     }
   });
-  document.querySelector('.brand').addEventListener('click', (event) => { if (!mayLeave()) event.preventDefault(); });
+  document.querySelector('.brand').addEventListener('click', event => { event.preventDefault(); switchLibrary('home'); });
   api('/auth/me').then(startSession).catch((error) => {
     showLogin();
     if (error.status !== 401) message('login-message', error.message, 'error');

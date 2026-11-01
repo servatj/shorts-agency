@@ -44,6 +44,8 @@ screenshots/
 # Docs are opt-in: only reviewed public migration guidance
 docs/*
 !docs/CLOUD_MIGRATION.md
+!docs/PUBLICATION_STATE.md
+!docs/github-actions-tests.yml.example
 
 # Local tooling and build artifacts
 __pycache__/

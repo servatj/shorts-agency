@@ -43,6 +43,10 @@ The `.gitignore` excludes runtime data, secrets, environment files, databases, m
 
 ## Using the workspace
 
+The Clarity interface has two main destinations, **Inicio** and **Vídeos**. A searchable channel selector filters owned content by account without merging brands; content search remains independent. Each video opens a full workspace with **Resumen**, **Guion**, **Publicación**, and **Analítica** tabs, script on the left and preview on the right. The external reference catalog remains accessible from a secondary action, not as another main navigation item. `/scripts` and `/social` remain compatible entry points; `/videos` and `/references` open the corresponding views.
+
+Published scripts are read-only. Registering a publication only records editorial state; it does not publish anything to a social network. After confirmation, both the script and `published` state are protected by the backend for browser and bearer API writes, returning HTTP 409 `published_script_locked` on attempted changes. Metadata and timestamped metrics remain editable. See [publication state and API contract](docs/PUBLICATION_STATE.md). Navigation warns about unsaved changes; a publication conflict preserves a recoverable copy rather than discarding the text.
+
 - **Owned library / scripts:** create and edit scripts, metadata, tags, status, and optional social-account assignment. New drafts created by the UI start in draft status.
 - **Social accounts:** read-only UI/API inventory; edit the local JSON as the operator. Its shape is `{"accounts": [], "recorded_at": null}`. Each account uses `id`, `platform` (`youtube`, `instagram`, or `tiktok`), `name`, `handle`, `profile_url`, `ownership`, `sync_status`, `source`, and optional `analytics`. Use stable IDs for existing script associations. Only enter profiles you have permission to record; inventory membership does not prove ownership. There is no hardcoded account total.
 - **References:** distinct from owned scripts. Import validated reference metadata through the bearer-only endpoint. Source metadata is not a verified transcript or a license to reuse content.

@@ -124,6 +124,14 @@ class ReferenceTests(unittest.TestCase):
             page.locator('#new-short').click()
             page.fill('#short-title', 'Unsaved owned draft')
             page.fill('#script', 'Keep my original script')
+            # Cancelling navigation preserves the entire unsaved draft.
+            page.once('dialog', lambda dialog: dialog.dismiss())
+            page.locator('#library-references').click(timeout=2000)
+            self.assertTrue(page.locator('#detail').is_visible())
+            self.assertEqual(page.input_value('#short-title'), 'Unsaved owned draft')
+            self.assertEqual(page.input_value('#script'), 'Keep my original script')
+            # Explicitly accepting discards it and opens the external catalog.
+            page.once('dialog', lambda dialog: dialog.accept())
             page.locator('#library-references').click(timeout=2000)
             page.locator('#reference-list button').first.wait_for()
             self.assertEqual(page.locator('#reference-list button').count(), 3)
@@ -164,8 +172,10 @@ class ReferenceTests(unittest.TestCase):
             page.locator('#library-owned').click()
             self.assertTrue(page.locator('#new-short').is_visible())
             self.assertFalse(page.locator('#reference-detail').is_visible())
-            self.assertEqual(page.input_value('#short-title'), 'Unsaved owned draft')
-            self.assertEqual(page.input_value('#script'), 'Keep my original script')
+            self.assertFalse(page.locator('#detail').is_visible())
+            page.locator('#new-short').click()
+            self.assertEqual(page.input_value('#short-title'), '')
+            self.assertEqual(page.input_value('#script'), '')
             self.assertEqual(errors, [])
             browser.close()
 
