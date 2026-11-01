@@ -47,6 +47,7 @@ docs/*
 !docs/PUBLICATION_STATE.md
 !docs/CHANNEL_DATA.md
 !docs/PREVIEWS.md
+!docs/ANALYTICS_UI.md
 !docs/github-actions-tests.yml.example
 
 # Local tooling and build artifacts

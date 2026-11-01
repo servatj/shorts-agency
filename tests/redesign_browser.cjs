@@ -66,7 +66,7 @@ module.exports = async function redesign(page, full) {
   await page.locator('#views').fill('12');
   await page.locator('#likes').fill('0');
   await page.locator('#save-metric').click();
-  await page.waitForFunction(() => document.querySelector('#metrics-history').textContent.includes('captura registrada'));
+  await page.waitForFunction(() => document.querySelector('#metrics-history .metric-history-row'));
   const metrics = await page.evaluate(async () => {
     const items = (await (await fetch('/v1/shorts')).json()).items;
     const record = items.find(i => i.title.startsWith('Guion QA'));

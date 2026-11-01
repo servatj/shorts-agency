@@ -468,6 +468,7 @@
   function showSection(section) {
     if (section === 'script-read') { readingScript = true; section = 'editor'; }
     activeSection = section;
+    $('detail').classList.toggle('analytics-active', section === 'metrics');
     for (const name of ['summary', 'editor', 'publication', 'metrics']) {
       $(`${name}-panel`).hidden = name !== section;
       $(`${name}-tab`).classList.toggle('active', name === section);
@@ -482,59 +483,140 @@
   function metricValue(value, suffix = '') {
     return value == null || value === '' || !Number.isFinite(Number(value)) ? '—' : `${numberFormat.format(Number(value))}${suffix}`;
   }
-  function renderMetrics(items) {
-    const container = $('metrics-history');
-    container.replaceChildren();
-    if (!items.length) {
-      const empty = node('div', 'metrics-empty');
-      empty.append(node('strong', '', 'Todavía no hay capturas'), node('span', '', 'Registra una observación para empezar el historial. Los campos vacíos se mostrarán como «—».'));
-      container.append(empty);
+  const metricLabels = {views: 'Visualizaciones', likes: 'Me gusta', comments: 'Comentarios', shares: 'Compartidos'};
+  let metricItems = [];
+  function validMetric(value) { return typeof value === 'number' && Number.isFinite(value) && value >= 0; }
+  function metricTime(item) { return typeof item.observed_at === 'string' ? Date.parse(item.observed_at) : NaN; }
+  function metricOrder(a, b) {
+    const at = metricTime(a), bt = metricTime(b);
+    return (Number.isFinite(bt) ? bt : -Infinity) - (Number.isFinite(at) ? at : -Infinity) || String(b.id ?? '').localeCompare(String(a.id ?? ''), 'en', {numeric: true});
+  }
+  function metricProvenance(item) {
+    const notes = typeof item.notes === 'string' ? item.notes.trim() : '';
+    const imported = /^Observación pública puntual; no sincronización\. Fuente: ([^\r\n]+)(?:\r?\n|$)/.exec(notes);
+    const url = imported ? thumbnailURL(imported[1]) : null;
+    // Imported payloads are provenance, never human prose or metric values.
+    const technical = /[{}]|(?:https?:|javascript:|data:)\S*|Identificador:|Datos originales:|(?:instagram|tiktok|youtube):|^\s*\[|"[^"\n]+"\s*:/i.test(notes);
+    return {label: imported ? 'Consulta pública' : item.source === 'manual' ? 'Manual' : 'Registro del agente', url, note: !imported && !technical ? notes : ''};
+  }
+  function clearMetrics() {
+    metricItems = [];
+    for (const id of ['metrics-kpis', 'metrics-history', 'metrics-evolution', 'metrics-context', 'metrics-retention']) $(id).replaceChildren();
+    $('metrics-results').hidden = true;
+  }
+  function renderMetricContext(latest) {
+    const box = $('metrics-context'); box.replaceChildren();
+    const record = state.current || {};
+    const copy = node('div', 'analytics-context-copy');
+    const account = accountFor(record);
+    copy.append(node('strong', '', account?.handle || account?.name || record.channel || 'Sin canal asociado'));
+    if (account) copy.append(node('span', 'muted', platforms[account.platform] || account.platform));
+    if (latest) {
+      const source = metricProvenance(latest);
+      copy.append(node('span', 'source-badge', source.label), node('span', 'small', `Última observación · ${dateText(latest.observed_at)}`));
+      const link = publicLink(source.url, 'Ver fuente ↗'); if (link) copy.append(link);
+    }
+    const publication = publicLink(record.preview_url || record.youtube_url, 'Abrir publicación ↗');
+    if (publication) copy.append(publication);
+    box.append(thumbnail(record, 'analytics-thumbnail'), copy);
+  }
+  function renderEvolution() {
+    const box = $('metrics-evolution'); box.replaceChildren();
+    const key = $('evolution-metric').value;
+    // One representative per instant: same deterministic tie-break as the KPIs.
+    const unique = new Map();
+    for (const item of metricItems) { const time = metricTime(item); if (Number.isFinite(time) && !unique.has(time)) unique.set(time, item); }
+    const timeline = [...unique.entries()].sort((a, b) => a[0] - b[0]);
+    const points = timeline.filter(([, item]) => validMetric(item[key]));
+    if (points.length < 2) {
+      box.append(node('strong', '', points.length === 1 || metricItems.length === 1 ? 'Una observación disponible' : 'Aún no hay datos suficientes para esta métrica'), node('p', 'muted', 'La evolución aparecerá al añadir más datos.'));
       return;
     }
-    const wrapper = node('div', 'table-scroll');
-    wrapper.tabIndex = 0;
-    wrapper.setAttribute('role', 'region');
-    wrapper.setAttribute('aria-label', 'Historial de rendimiento; desplaza horizontalmente para ver todas las columnas');
-    const table = node('table');
-    table.append(node('caption', '', `${items.length} ${items.length === 1 ? 'captura registrada' : 'capturas registradas'} · Valores no disponibles: —`));
-    const thead = node('thead');
-    const head = node('tr');
-    for (const text of ['Observación', 'Visualizaciones', 'Me gusta', 'Comentarios', 'Compartidos', 'Duración media', 'Retención', 'Fuente']) {
-      const th = node('th', '', text); th.scope = 'col'; head.append(th);
+    const svgNode = (tag, attrs = {}, text) => {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+      for (const [name, value] of Object.entries(attrs)) el.setAttribute(name, String(value));
+      if (text !== undefined) el.textContent = text;
+      return el;
+    };
+    const svg = svgNode('svg', {viewBox: '0 0 640 240', role: 'img', 'aria-labelledby': 'evolution-title evolution-description'});
+    const values = points.map(([, item]) => item[key]), low = Math.min(...values), high = Math.max(...values);
+    const first = timeline[0][0], last = timeline.at(-1)[0];
+    const x = time => 64 + ((time - first) / (last - first)) * 548;
+    const y = value => high === low ? 105 : 180 - ((value - low) / (high - low)) * 150;
+    const descriptions = timeline.map(([, item]) => `${dateText(item.observed_at)}: ${validMetric(item[key]) ? metricValue(item[key]) : 'Sin dato'}`);
+    svg.append(svgNode('title', {id: 'evolution-title'}, `${metricLabels[key]} · Observaciones registradas`), svgNode('desc', {id: 'evolution-description'}, descriptions.join('; ') + '. Los huecos no se conectan. Las observaciones del mismo instante se representan una vez.'));
+    svg.append(svgNode('line', {x1:64, y1:190, x2:612, y2:190, stroke:'#dce3ee'}));
+    for (const value of new Set([low, high])) svg.append(svgNode('text', {x:54, y:y(value) + 4, 'text-anchor':'end'}, metricValue(value)));
+    for (const [time, anchor] of [[first, 'start'], [last, 'end']]) svg.append(svgNode('text', {x:x(time), y:220, 'text-anchor':anchor}, new Intl.DateTimeFormat('es-ES', {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'}).format(time)));
+    let segment = [];
+    const flush = () => { if (segment.length > 1) svg.append(svgNode('polyline', {points:segment.join(' '), fill:'none', stroke:'currentColor', 'stroke-width':2})); segment = []; };
+    for (const [time, item] of timeline) {
+      if (!validMetric(item[key])) { flush(); continue; }
+      segment.push(`${x(time)},${y(item[key])}`);
+      const dot = svgNode('circle', {cx:x(time), cy:y(item[key]), r:4, fill:'currentColor'});
+      dot.append(svgNode('title', {}, `${dateText(item.observed_at)}: ${metricValue(item[key])}`)); svg.append(dot);
     }
-    thead.append(head); table.append(thead);
-    const tbody = node('tbody');
-    const sorted = [...items].sort((a, b) => new Date(b.observed_at) - new Date(a.observed_at));
-    for (const item of sorted) {
-      const tr = node('tr');
-      const observed = node('td', '', dateText(item.observed_at));
-      if (item.notes) observed.append(node('span', 'metric-note', item.notes));
-      tr.append(observed);
-      for (const field of metricFields) tr.append(node('td', '', metricValue(item[field], field === 'retention_percent' ? ' %' : field === 'average_view_duration_seconds' ? ' s' : '')));
-      tr.append(node('td', '', item.source === 'manual' ? 'Manual' : item.source || '—'));
-      tbody.append(tr);
+    flush(); box.append(svg);
+    const details = node('details', 'chart-values'); details.append(node('summary', '', 'Valores de la gráfica'));
+    const list = node('ul'); for (const description of descriptions) list.append(node('li', '', description)); details.append(list); box.append(details);
+  }
+  function renderMetrics(items) {
+    metricItems = [...items].sort(metricOrder);
+    renderMetricContext(metricItems[0]);
+    $('metrics-results').hidden = false;
+    const latest = metricItems[0] || {};
+    const kpis = $('metrics-kpis'); kpis.replaceChildren();
+    for (const [key, label] of Object.entries(metricLabels)) {
+      const card = node('div', 'kpi-card'); card.dataset.kpi = key;
+      card.classList.toggle('has-value', validMetric(latest[key]));
+      card.append(node('span', 'kpi-label', label), node('strong', 'kpi-value', validMetric(latest[key]) ? metricValue(latest[key]) : '—'));
+      if (!validMetric(latest[key])) card.append(node('span', 'muted', 'Sin dato'));
+      kpis.append(card);
     }
-    table.append(tbody); wrapper.append(table); container.append(wrapper);
+    const retention = [];
+    if (validMetric(latest.retention_percent)) retention.push(`Retención: ${metricValue(latest.retention_percent, ' %')}`);
+    if (validMetric(latest.average_view_duration_seconds)) retention.push(`Duración media: ${metricValue(latest.average_view_duration_seconds, ' s')}`);
+    $('metrics-retention').textContent = retention.join(' · ') || 'Sin datos de retención ni duración media.';
+    const history = $('metrics-history'); history.replaceChildren();
+    if (!metricItems.length) history.append(node('p', 'muted', 'Todavía no hay observaciones. Añade una para empezar.'));
+    for (const item of metricItems) {
+      const row = node('article', 'metric-history-row');
+      row.append(node('strong', '', dateText(item.observed_at)));
+      const values = node('dl', 'metric-history-values');
+      for (const [key, label] of Object.entries(metricLabels)) {
+        const pair = node('div'); pair.append(node('dt', '', label), node('dd', '', validMetric(item[key]) ? metricValue(item[key]) : '—')); values.append(pair);
+      }
+      row.append(values);
+      const source = metricProvenance(item), meta = node('div', 'metric-history-meta');
+      meta.append(node('span', 'source-badge', source.label));
+      const link = publicLink(source.url, 'Ver fuente ↗'); if (link) meta.append(link);
+      row.append(meta);
+      if (source.note) { const details = node('details', 'metric-human-note'); details.append(node('summary', '', 'Nota de la observación'), node('p', '', source.note)); row.append(details); }
+      if (validMetric(item.retention_percent) || validMetric(item.average_view_duration_seconds)) row.append(node('p', 'small', `Retención: ${metricValue(item.retention_percent, ' %')} · Duración media: ${metricValue(item.average_view_duration_seconds, ' s')}`));
+      history.append(row);
+    }
+    renderEvolution();
   }
   async function loadMetrics() {
     const id = state.current && state.current.id;
     const request = ++state.metricRequest;
+    clearMetrics();
     $('metric-entry').hidden = id == null;
+    $('refresh-metrics').hidden = id == null;
     $('refresh-metrics').disabled = true;
     if (id == null) {
-      $('metrics-history').replaceChildren(node('p', 'metrics-empty', 'Guarda primero el borrador para añadir capturas de rendimiento.'));
-      message('metrics-message');
+      message('metrics-message', 'Guarda primero el borrador para añadir observaciones de rendimiento.');
       return;
     }
-    message('metrics-message', 'Cargando capturas…');
-    $('metrics-history').replaceChildren();
+    renderMetricContext();
+    message('metrics-message', 'Cargando observaciones…');
     try {
       const data = await api(`/v1/shorts/${encodeURIComponent(id)}/metrics`);
-      if (request !== state.metricRequest) return;
+      if (request !== state.metricRequest || state.current?.id !== id) return;
       if (!Array.isArray(data.items)) throw new Error('No se ha recibido un historial válido.');
       renderMetrics(data.items);
       message('metrics-message');
-    } catch (error) { if (request === state.metricRequest) message('metrics-message', error.message, 'error'); }
+    } catch (error) { if (request === state.metricRequest) { clearMetrics(); message('metrics-message', error.message, 'error'); } }
     finally { if (request === state.metricRequest) $('refresh-metrics').disabled = false; }
   }
   async function saveMetric(event) {
@@ -888,6 +970,7 @@
   $('status-filter').addEventListener('change', renderList);
   $('refresh-list').addEventListener('click', loadList);
   $('refresh-metrics').addEventListener('click', loadMetrics);
+  $('evolution-metric').addEventListener('change', renderEvolution);
   $('editor-tab').addEventListener('click', () => showSection('editor'));
   $('script-read-tab').addEventListener('click', () => showSection('script-read'));
   $('metrics-tab').addEventListener('click', () => showSection('metrics'));
